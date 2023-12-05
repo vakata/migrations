@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace helpers;
+namespace vakata\migrations;
 
 use vakata\database\DBInterface;
 

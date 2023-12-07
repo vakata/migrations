@@ -20,7 +20,7 @@ Prepare a directory for all migrations. A migration consists of a folder with 3 
  - data.sql - optional data to insert / update / delete
  - uninstall.sql - optional statements to fully revert this migration
 
-Migrations are either base or app migrations - base migrations are applied first, then app migrations. Some migrations are behind a feature flag - if not passed to the constructor they will not be applied. Example structure:
+Example structure:
 ```
  |-migrations
    |- base
@@ -30,14 +30,14 @@ Migrations are either base or app migrations - base migrations are applied first
    |        |- data.sql
    |        |- uninstall.sql
    |- app
-      |- _core
+      |- feature1
       |  |- 000
       |  |  |- schema.sql
       |  |  |- data.sql
       |  |  |- uninstall.sql
       |  |- 001
       |     |- schema.sql
-      |- feature1
+      |- feature2
          |- 000
             |- schema.sql
             |- uninstall.sql
@@ -67,8 +67,11 @@ CREATE TABLE IF NOT EXISTS migrations (
 $migrations = new \vakata\migrations\Migrations(
     new \vakata\database\DB('<connection-string-here>'),
     'path/to/migrations/folder',
-    [ 'feature1', 'feature2' ] // optional feature flags
+    [ 'base/', 'app/feature2', 'app' ] // optional feature flags (also used for sorting)
+    null // optional sort callback
 );
+// this will install the packages in this order:
+// base/_core/000, app/feature2/000, app/feature1/000, app/feature1/000
 $migrations->up();
 ```
 

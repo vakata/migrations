@@ -4,25 +4,66 @@ declare(strict_types=1);
 
 namespace vakata\migrations;
 
+use RuntimeException;
+use SplFileInfo;
 use vakata\database\DBInterface;
 
 class Migrations
 {
     protected DBInterface $db;
     protected string $path;
-    protected array $features;
+    protected array $packages = [];
 
     public function __construct(
         DBInterface $db,
         string $path,
-        array $features = []
+        ?array $features = null,
+        ?callable $order = null
     ) {
         $this->db = $db;
-        $this->path = rtrim($path, '/') . DIRECTORY_SEPARATOR . $db->driverName() . DIRECTORY_SEPARATOR;
-        if (!is_dir($this->path) || !is_dir($this->path . 'base')) {
-            throw new \Exception('Unsupported database');
+        $path = realpath($path);
+        if (!$path || !is_dir($path)) {
+            throw new RuntimeException('Invalid path');
         }
-        $this->features = $features;
+        $path = rtrim($path, '/\\') . DIRECTORY_SEPARATOR;
+        $this->path = $path;
+
+        $migrations = [];
+        $files = new \RecursiveIteratorIterator(
+            new \RecursiveDirectoryIterator(
+                $path,
+                \FilesystemIterator::KEY_AS_PATHNAME |
+                \FilesystemIterator::CURRENT_AS_FILEINFO |
+                \FilesystemIterator::SKIP_DOTS
+            ),
+            \RecursiveIteratorIterator::CHILD_FIRST
+        );
+        foreach ($files as $object) {
+            /**
+             * @var SplFileInfo $object
+             */
+            if ($object->isFile() && strtolower($object->getExtension()) === 'sql') {
+                $migrations[] = substr(dirname($object->getRealPath()), strlen($path));
+            }
+        }
+        $migrations = array_unique($migrations);
+        sort($migrations);
+        $ordered = [];
+        if ($features) {
+            foreach ($features as $feature) {
+                foreach ($migrations as $migration) {
+                    if (strpos($migration, $feature) === 0 && !in_array($migration, $ordered)) {
+                        $ordered[] = $migration;
+                    }
+                }
+            }
+        } else {
+            $ordered = $migrations;
+        }
+        if (isset($order)) {
+            $ordered = call_user_func($order, $ordered);
+        }
+        $this->packages = $ordered;
     }
 
     protected function execute(string $sql): void
@@ -81,58 +122,9 @@ class Migrations
             // when removing the core package the migrations table is removed
         }
     }
-    protected function collect(): array
+    public function packages(): array
     {
-        $migrations = [];
-        foreach (scandir($this->path . 'base/_core/') ?: [] as $migration) {
-            if (
-                !in_array($migration, ['.', '..']) &&
-                is_dir($this->path . 'base/_core/' . $migration)
-            ) {
-                $migrations[] = 'base/_core/' . $migration;
-            }
-        }
-        foreach (scandir($this->path . 'base') ?: [] as $item) {
-            if (
-                !in_array($item, ['.', '..']) &&
-                is_dir($this->path . 'base/' . $item) &&
-                (isset($this->features[strtoupper($item)]) && $this->features[strtoupper($item)])
-            ) {
-                foreach (scandir($this->path . 'base/' . $item) ?: [] as $migration) {
-                    if (
-                        !in_array($migration, ['.', '..']) &&
-                        is_dir($this->path . 'base/' . $item . '/' . $migration)
-                    ) {
-                        $migrations[] = 'base/' . $item . '/' . $migration;
-                    }
-                }
-            }
-        }
-        foreach (scandir($this->path . 'app/_core/') ?: [] as $migration) {
-            if (
-                !in_array($migration, ['.', '..']) &&
-                is_dir($this->path . 'app/_core/' . $migration)
-            ) {
-                $migrations[] = 'app/_core/' . $migration;
-            }
-        }
-        foreach (scandir($this->path . 'app') ?: [] as $item) {
-            if (
-                !in_array($item, ['.', '..']) &&
-                is_dir($this->path . 'app/' . $item) &&
-                (isset($this->features[strtoupper($item)]) && $this->features[strtoupper($item)])
-            ) {
-                foreach (scandir($this->path . 'app/' . $item) ?: [] as $migration) {
-                    if (
-                        !in_array($migration, ['.', '..']) &&
-                        is_dir($this->path . 'app/' . $item . '/' . $migration)
-                    ) {
-                        $migrations[] = 'app/' . $item . '/' . $migration;
-                    }
-                }
-            }
-        }
-        return $migrations;
+        return $this->packages;
     }
     protected function removable(string $migration): bool
     {
@@ -144,30 +136,21 @@ class Migrations
     }
     public function waiting(): array
     {
-        return array_diff($this->collect(), $this->status());
+        return array_diff($this->packages, $this->status());
     }
     public function reset(): self
     {
         $status = $this->status();
-        $migrations = $this->collect();
-        foreach (array_reverse($migrations) as $migration) {
+        foreach (array_reverse($this->packages) as $migration) {
             if (in_array($migration, $status) && $this->removable($migration)) {
                 $this->uninstall($migration);
                 $this->removed($migration);
             }
         }
-        foreach ($migrations as $migration) {
-            $parts = explode('/', $migration);
-            if ($parts[0] === 'base') {
-                if ($this->removable($migration)) {
-                    if (
-                        $parts[1] === '_core' ||
-                        (isset($this->features[strtoupper($parts[1])]) && $this->features[strtoupper($parts[1])])
-                    ) {
-                        $this->install($migration);
-                        $this->applied($migration);
-                    }
-                }
+        foreach ($this->packages as $migration) {
+            if ($this->removable($migration)) {
+                $this->install($migration);
+                $this->applied($migration);
             }
         }
         return $this;
@@ -175,7 +158,7 @@ class Migrations
     public function up(): self
     {
         $status = $this->status();
-        foreach ($this->collect() as $migration) {
+        foreach ($this->packages as $migration) {
             if (!in_array($migration, $status)) {
                 $this->install($migration);
                 $this->applied($migration);
@@ -186,7 +169,7 @@ class Migrations
     public function down(): self
     {
         $status = $this->status();
-        foreach (array_reverse($this->collect()) as $migration) {
+        foreach (array_reverse($this->packages) as $migration) {
             if (in_array($migration, $status)) {
                 $this->uninstall($migration);
                 $this->removed($migration);
@@ -197,13 +180,13 @@ class Migrations
     public function to(array $desired): self
     {
         $status = $this->status();
-        foreach (array_reverse($this->collect()) as $migration) {
+        foreach (array_reverse($this->packages) as $migration) {
             if (in_array($migration, $status) && !in_array($migration, $desired)) {
                 $this->uninstall($migration);
                 $this->removed($migration);
             }
         }
-        foreach ($this->collect() as $migration) {
+        foreach ($this->packages as $migration) {
             if (in_array($migration, $desired) && !in_array($migration, $status)) {
                 $this->install($migration);
                 $this->applied($migration);

@@ -51,6 +51,7 @@ class Migrations
         $ordered = [];
         if ($features) {
             foreach ($features as $feature) {
+                $feature = str_replace([ '\\', '/' ], DIRECTORY_SEPARATOR, $feature);
                 foreach ($migrations as $migration) {
                     if (strpos($migration, $feature) === 0 && !in_array($migration, $ordered)) {
                         $ordered[] = $migration;
